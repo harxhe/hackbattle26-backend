@@ -623,7 +623,7 @@ func DeleteTeam(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"message": "Team deleted successfully"})
 }
 
-// GetTeam returns full team details including Track & Subtrack
+// GetTeam returns full team details including Track
 func GetTeam(w http.ResponseWriter, r *http.Request) {
 	userEmail, ok := getUserEmailFromContext(r)
 	if !ok {
@@ -668,20 +668,44 @@ func GetTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Enrich members with each member's regNo from their user document.
 	membersList, _ := teamDoc.DataAt("members")
+	enrichedMembers := make([]map[string]interface{}, 0)
+	if rawMembers, ok := membersList.([]interface{}); ok {
+		for _, raw := range rawMembers {
+			m, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			email, _ := m["email"].(string)
+			memberCopy := make(map[string]interface{}, len(m)+1)
+			for k, v := range m {
+				memberCopy[k] = v
+			}
+			memberCopy["regNo"] = ""
+			if email != "" {
+				userDoc, err := config.FirestoreClient.Collection("users").Doc(email).Get(ctx)
+				if err == nil {
+					if regNo, exists := userDoc.Data()["regNo"]; exists {
+						if regNoStr, ok := regNo.(string); ok {
+							memberCopy["regNo"] = regNoStr
+						}
+					}
+				}
+			}
+			enrichedMembers = append(enrichedMembers, memberCopy)
+		}
+	}
 
 	response := map[string]interface{}{
 		"id":           teamDoc.Ref.ID,
 		"name":         teamData.Name,
 		"code":         teamData.Code,
 		"leaderId":     teamData.LeaderID,
-		"members":      membersList,
+		"members":      enrichedMembers,
 		"track":        teamData.Track,
-		"subtrack":     teamData.Subtrack,
-		"project_desc": teamData.ProjectDesc,
-		"github_link":  teamData.GithubLink,
 		"figma_link":   teamData.FigmaLink,
-		"other_files":  teamData.OtherFiles,
+		"other_links":  teamData.OtherLinks,
 		"submitted_at": teamData.SubmittedAt,
 		"updated_at":   teamData.UpdatedAt,
 		"isLeader":     teamData.LeaderID == userEmail,
@@ -706,20 +730,33 @@ func GetTeam(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-// SubmissionPayload defines the payload for project submissions and updates
-type SubmissionPayload struct {
-	ProjectDesc *string `json:"project_desc"`
-	GithubLink  *string `json:"github_link"`
-	FigmaLink   *string `json:"figma_link"`
-	OtherFiles  *string `json:"other_files"`
-	Track       *string `json:"track,omitempty"`
-	Subtrack    *string `json:"subtrack,omitempty"`
+const maxOtherLinks = 6
+
+// sanitizeOtherLinks trims empty entries and enforces the 6-link cap.
+func sanitizeOtherLinks(links []string) ([]string, error) {
+	if len(links) > maxOtherLinks {
+		return nil, &httpError{fmt.Sprintf("At most %d additional links are allowed", maxOtherLinks), http.StatusBadRequest}
+	}
+	cleaned := make([]string, 0, len(links))
+	for _, link := range links {
+		link = strings.TrimSpace(link)
+		if link != "" {
+			cleaned = append(cleaned, link)
+		}
+	}
+	return cleaned, nil
 }
 
-// TrackPayload for saving/updating Track and optional Subtrack independently
+// SubmissionPayload defines the payload for project submissions and updates
+type SubmissionPayload struct {
+	Track      *string  `json:"track"`
+	FigmaLink  *string  `json:"figma_link"`
+	OtherLinks []string `json:"other_links"`
+}
+
+// TrackPayload for saving/updating Track independently
 type TrackPayload struct {
-	Track    string  `json:"track"`
-	Subtrack *string `json:"subtrack"` // Pointer allows nil when subtrack isn't required
+	Track string `json:"track"`
 }
 
 func UpdateTrack(w http.ResponseWriter, r *http.Request) {
@@ -747,7 +784,6 @@ func UpdateTrack(w http.ResponseWriter, r *http.Request) {
 
 		updates := []firestore.Update{
 			{Path: "Track", Value: payload.Track},
-			{Path: "Subtrack", Value: payload.Subtrack},
 			{Path: "UpdatedAt", Value: time.Now()},
 		}
 
@@ -772,8 +808,17 @@ func SubmitProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if payload.ProjectDesc == nil || *payload.ProjectDesc == "" || payload.GithubLink == nil || *payload.GithubLink == "" {
-		http.Error(w, "Project description and GitHub link are required", http.StatusBadRequest)
+	if payload.Track == nil || *payload.Track == "" {
+		http.Error(w, "Track is required", http.StatusBadRequest)
+		return
+	}
+	if payload.FigmaLink == nil || *payload.FigmaLink == "" {
+		http.Error(w, "Figma link is required", http.StatusBadRequest)
+		return
+	}
+	otherLinks, err := sanitizeOtherLinks(payload.OtherLinks)
+	if err != nil {
+		handleFirestoreError(w, err)
 		return
 	}
 
@@ -797,18 +842,10 @@ func SubmitProject(w http.ResponseWriter, r *http.Request) {
 
 		now := time.Now()
 		updates := []firestore.Update{
-			{Path: "ProjectDesc", Value: payload.ProjectDesc},
-			{Path: "GithubLink", Value: payload.GithubLink},
+			{Path: "Track", Value: payload.Track},
 			{Path: "FigmaLink", Value: payload.FigmaLink},
-			{Path: "OtherFiles", Value: payload.OtherFiles},
+			{Path: "OtherLinks", Value: otherLinks},
 			{Path: "UpdatedAt", Value: now},
-		}
-
-		if payload.Track != nil {
-			updates = append(updates, firestore.Update{Path: "Track", Value: payload.Track})
-		}
-		if payload.Subtrack != nil {
-            updates = append(updates, firestore.Update{Path: "Subtrack", Value: payload.Subtrack})
 		}
 
 		if _, err := doc.DataAt("SubmittedAt"); err != nil {
@@ -836,6 +873,16 @@ func UpdateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var otherLinks []string
+	if payload.OtherLinks != nil {
+		cleaned, err := sanitizeOtherLinks(payload.OtherLinks)
+		if err != nil {
+			handleFirestoreError(w, err)
+			return
+		}
+		otherLinks = cleaned
+	}
+
 	teamID, err := verifyTeamLeader(ctx, r)
 	if err != nil {
 		handleFirestoreError(w, err)
@@ -854,22 +901,18 @@ func UpdateProject(w http.ResponseWriter, r *http.Request) {
 		}
 
 		updates := []firestore.Update{}
-		if payload.ProjectDesc != nil {
-			updates = append(updates, firestore.Update{Path: "ProjectDesc", Value: *payload.ProjectDesc})
-		}
-		if payload.GithubLink != nil {
-			updates = append(updates, firestore.Update{Path: "GithubLink", Value: *payload.GithubLink})
+		if payload.Track != nil {
+			if *payload.Track == "" {
+				return &httpError{"Track cannot be empty", http.StatusBadRequest}
+			}
+			updates = append(updates, firestore.Update{Path: "Track", Value: *payload.Track})
 		}
 		if payload.FigmaLink != nil {
 			updates = append(updates, firestore.Update{Path: "FigmaLink", Value: *payload.FigmaLink})
 		}
-		if payload.Track != nil {
-			updates = append(updates, firestore.Update{Path: "Track", Value: payload.Track})
+		if payload.OtherLinks != nil {
+			updates = append(updates, firestore.Update{Path: "OtherLinks", Value: otherLinks})
 		}
-		if payload.Subtrack != nil {
-			updates = append(updates, firestore.Update{Path: "Subtrack", Value: payload.Subtrack})
-		}
-		updates = append(updates, firestore.Update{Path: "OtherFiles", Value: payload.OtherFiles})
 
 		if len(updates) == 0 {
 			return &httpError{"No update data provided", http.StatusBadRequest}
