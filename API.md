@@ -58,10 +58,9 @@ Document ID = **team code** (6 chars, `A-Z0-9`).
 | `Name` | string | Team name |
 | `leaderId` | string | Email of the team leader |
 | `members` | array of `{email, name}` | Each member's email and name |
-| `ProblemStmt` | string | Problem statement (after submission) |
-| `GithubLink` | string | GitHub repository link |
-| `FigmaLink` | string | Figma design link |
-| `OtherFiles` | string | Additional file links (can be empty) |
+| `Track` | string | Track the team is building for |
+| `FigmaLink` | string | Figma design link (after submission) |
+| `OtherLinks` | array of string | Additional links (max 6, after submission) |
 | `CreatedAt` | timestamp | When the team was created |
 | `SubmittedAt` | timestamp | When the project was first submitted (set once) |
 | `UpdatedAt` | timestamp | When the team/submission was last updated |
@@ -241,10 +240,9 @@ Returns the authenticated user's team details.
     { "email": "lead@vit.edu", "name": "Alice" },
     { "email": "bob@vit.edu", "name": "Bob" }
   ],
-  "problem_stmt": "Build an AI chatbot",
-  "github_link": "https://github.com/org/repo",
+  "track": "E-Commerce",
   "figma_link": "https://figma.com/file/xyz",
-  "other_files": "https://drive.google.com/...",
+  "other_links": ["https://drive.google.com/..."],
   "submitted_at": "2026-08-24T10:00:00Z",
   "updated_at": "2026-08-24T10:05:00Z",
   "isLeader": true
@@ -253,7 +251,7 @@ Returns the authenticated user's team details.
 
 Field notes:
 - `members` is the raw `members` array from Firestore (list of `{email, name}` objects).
-- `problem_stmt`, `github_link`, `figma_link`, `other_files`, `submitted_at`, `updated_at` are omitted/`null` if not set.
+- `track`, `figma_link`, `other_links`, `submitted_at`, `updated_at` are omitted/`null` if not set.
 - `isLeader` is `true` when the authenticated user's email equals `leaderId`.
 
 **Response `204 No Content`** (user is not part of any team)
@@ -379,28 +377,27 @@ Submits/updates the team's project. **Leader only.**
 **Request body**
 ```json
 {
-  "problem_stmt": "Build an AI chatbot for students",
-  "github_link": "https://github.com/org/repo",
+  "track": "E-Commerce",
   "figma_link": "https://figma.com/file/xyz",
-  "other_files": "https://drive.google.com/..."
+  "other_links": ["https://drive.google.com/..."]
 }
 ```
 
 | Field | Required | Type |
 | --- | --- | --- |
-| `problem_stmt` | Yes | string |
-| `github_link` | Yes | string |
-| `figma_link` | No | string |
-| `other_files` | No | string |
+| `track` | Yes | string |
+| `figma_link` | Yes | string |
+| `other_links` | No | array of string (max 6) |
 
 **Behavior:**
 - `SubmittedAt` is set on the first submission only (not overwritten on later submits).
 - `UpdatedAt` is always updated to now.
+- Empty strings in `other_links` are trimmed out before saving.
 
 **Response `200 OK`**
 ```json
 {
-  "message": "Project submitted/updated successfully"
+  "message": "Project submitted successfully"
 }
 ```
 
@@ -409,7 +406,7 @@ Submits/updates the team's project. **Leader only.**
 | Status | Body |
 | --- | --- |
 | `400 Bad Request` | `Invalid request body` |
-| `400 Bad Request` | `Problem statement and GitHub link are required` |
+| `400 Bad Request` | `Track is required` / `Figma link is required` / `At most 6 additional links are allowed` |
 | `401 Unauthorized` | `Invalid token: missing email` |
 | `403 Forbidden` | `User is not a team leader` |
 | `404 Not Found` | `User profile not found` / `Team not found` |
@@ -426,10 +423,9 @@ Updates an already-submitted project. **Leader only.** Only the fields provided 
 **Request body** (all fields optional; include only what you want to change)
 ```json
 {
-  "problem_stmt": "Updated problem statement",
-  "github_link": "https://github.com/org/new-repo",
+  "track": "Finance",
   "figma_link": "https://figma.com/file/abc",
-  "other_files": "https://drive.google.com/..."
+  "other_links": ["https://drive.google.com/..."]
 }
 ```
 
