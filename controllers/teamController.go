@@ -687,6 +687,20 @@ func GetTeam(w http.ResponseWriter, r *http.Request) {
 		"isLeader":     teamData.LeaderID == userEmail,
 	}
 
+	// Priority: if isQualifiedForFinalRound exists in Firestore, send only that.
+	// Else if isQualifiedForR3 exists, send only that.
+	// Otherwise omit both fields entirely.
+	rawData := teamDoc.Data()
+	if finalVal, hasFinal := rawData["isQualifiedForFinalRound"]; hasFinal {
+		if v, ok := finalVal.(bool); ok {
+			response["isQualifiedForFinalRound"] = v
+		}
+	} else if r3Val, hasR3 := rawData["isQualifiedForR3"]; hasR3 {
+		if v, ok := r3Val.(bool); ok {
+			response["isQualifiedForR3"] = v
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
