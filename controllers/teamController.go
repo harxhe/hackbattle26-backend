@@ -24,7 +24,6 @@ type TeamPayload struct {
 }
 
 const maxTeamSize = 5
-const minTeamSize = 2
 
 type httpError struct {
 	message string
@@ -833,11 +832,6 @@ func SubmitProject(w http.ResponseWriter, r *http.Request) {
 		doc, err := tx.Get(teamRef)
 		if err != nil {
 			return &httpError{"Team not found", http.StatusNotFound}
-		}
-
-		membersData, _ := doc.DataAt("members")
-		if members, ok := membersData.([]interface{}); !ok || len(members) < minTeamSize {
-			return &httpError{fmt.Sprintf("Team must have at least %d members to submit", minTeamSize), http.StatusForbidden}
 		}
 
 		now := time.Now()
